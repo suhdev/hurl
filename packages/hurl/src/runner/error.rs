@@ -122,6 +122,9 @@ pub enum RunnerErrorKind {
     },
     QueryInvalidXml,
     QueryInvalidJson,
+    QueryInvalidCelExpression {
+        value: String,
+    },
     TemplateVariableNotDefined {
         name: String,
     },
@@ -170,6 +173,9 @@ impl DisplaySourceError for RunnerError {
             RunnerErrorKind::PossibleLoggedSecret => "Invalid redacted secret".to_string(),
             RunnerErrorKind::QueryHeaderNotFound => "Header not found".to_string(),
             RunnerErrorKind::QueryInvalidJson => "Invalid JSON".to_string(),
+            RunnerErrorKind::QueryInvalidCelExpression { .. } => {
+                "Invalid CEL expression".to_string()
+            }
             RunnerErrorKind::QueryInvalidJsonpathExpression { .. } => {
                 "Invalid JSONPath".to_string()
             }
@@ -332,6 +338,11 @@ impl DisplaySourceError for RunnerError {
             }
             RunnerErrorKind::QueryInvalidJson => {
                 let message = "HTTP response is not a valid JSON";
+                let message = error::add_carets(message, self.source_info, content);
+                color_red_multiline_string(&message)
+            }
+            RunnerErrorKind::QueryInvalidCelExpression { value } => {
+                let message = &format!("CEL expression '{value}' is not valid");
                 let message = error::add_carets(message, self.source_info, content);
                 color_red_multiline_string(&message)
             }

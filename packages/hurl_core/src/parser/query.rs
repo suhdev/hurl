@@ -54,6 +54,7 @@ fn query_value(reader: &mut Reader) -> ParseResult<QueryValue> {
             certificate_query,
             ip_query,
             redirects_query,
+            cel_query,
         ],
         reader,
     )
@@ -211,6 +212,13 @@ fn ip_query(reader: &mut Reader) -> ParseResult<QueryValue> {
 fn redirects_query(reader: &mut Reader) -> ParseResult<QueryValue> {
     try_literal("redirects", reader)?;
     Ok(QueryValue::Redirects)
+}
+
+fn cel_query(reader: &mut Reader) -> ParseResult<QueryValue> {
+    try_literal("cel", reader)?;
+    let space0 = one_or_more_spaces(reader)?;
+    let expr = quoted_template(reader).map_err(|e| e.to_non_recoverable())?;
+    Ok(QueryValue::Cel { space0, expr })
 }
 
 fn certificate_field(reader: &mut Reader) -> ParseResult<CertificateAttributeName> {
@@ -457,6 +465,28 @@ mod tests {
             Query {
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 9)),
                 value: QueryValue::RawBytes,
+            }
+        );
+    }
+
+    #[test]
+    fn test_cel_query() {
+        let mut reader = Reader::new("cel \"body.count > 10\"");
+        assert_eq!(
+            cel_query(&mut reader).unwrap(),
+            QueryValue::Cel {
+                space0: Whitespace {
+                    value: String::from(" "),
+                    source_info: SourceInfo::new(Pos::new(1, 4), Pos::new(1, 5)),
+                },
+                expr: Template::new(
+                    Some('"'),
+                    vec![TemplateElement::String {
+                        value: "body.count > 10".to_string(),
+                        source: "body.count > 10".to_source(),
+                    }],
+                    SourceInfo::new(Pos::new(1, 5), Pos::new(1, 22))
+                )
             }
         );
     }
