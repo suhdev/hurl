@@ -629,6 +629,10 @@ pub fn walk_query<V: Visitor>(visitor: &mut V, query: &Query) {
             visitor.visit_whitespace(space0);
             visitor.visit_string(attribute_name.to_source().as_str());
         }
+        QueryValue::Cel { space0, expr } => {
+            visitor.visit_whitespace(space0);
+            visitor.visit_template(expr);
+        }
         QueryValue::Body
         | QueryValue::Status
         | QueryValue::Url

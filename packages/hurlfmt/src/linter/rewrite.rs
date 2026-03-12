@@ -555,6 +555,10 @@ impl Lint for Query {
             }
             QueryValue::Ip => {}
             QueryValue::Redirects => {}
+            QueryValue::Cel { expr, .. } => {
+                s.push(' ');
+                s.push_str(&expr.lint());
+            }
         }
         s
     }

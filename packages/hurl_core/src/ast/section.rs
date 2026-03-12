@@ -178,6 +178,10 @@ pub enum QueryValue {
     },
     Ip,
     Redirects,
+    Cel {
+        space0: Whitespace,
+        expr: Template,
+    },
 }
 
 impl QueryValue {
@@ -202,6 +206,7 @@ impl QueryValue {
             QueryValue::Certificate { .. } => "certificate",
             QueryValue::Ip => "ip",
             QueryValue::Redirects => "redirects",
+            QueryValue::Cel { .. } => "cel",
         }
     }
 }

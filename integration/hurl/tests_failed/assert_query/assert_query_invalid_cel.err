@@ -1,0 +1,9 @@
+error: Invalid CEL expression
+  --> tests_failed/assert_query/assert_query_invalid_cel.hurl:4:1
+   |
+   | GET http://localhost:8000/cel
+   | ...
+ 4 | cel "undefined_variable + 1" == true
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CEL expression 'Undeclared reference to 'undefined_variable'' is not valid
+   |
+

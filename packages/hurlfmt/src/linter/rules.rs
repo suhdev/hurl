@@ -253,6 +253,10 @@ fn lint_query_value(query_value: &QueryValue) -> QueryValue {
         },
         QueryValue::Ip => QueryValue::Ip,
         QueryValue::Redirects => QueryValue::Redirects,
+        QueryValue::Cel { expr, .. } => QueryValue::Cel {
+            expr: expr.clone(),
+            space0: one_whitespace(),
+        },
     }
 }
 

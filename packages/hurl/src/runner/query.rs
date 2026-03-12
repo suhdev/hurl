@@ -76,6 +76,9 @@ pub fn eval_query(
         } => eval_query_certificate(last_response, *field),
         QueryValue::Ip => eval_ip(last_response),
         QueryValue::Redirects => eval_redirects(responses),
+        QueryValue::Cel { expr, .. } => {
+            eval_query_cel(last_response, expr, variables, query.source_info)
+        }
     }
 }
 
@@ -435,6 +438,156 @@ fn eval_redirects(responses: &[&Response]) -> QueryResult {
         }
     }
     Ok(Some(Value::List(values)))
+}
+
+/// Evaluates a CEL expression on the HTTP `response`, given a set of `variables`.
+///
+/// `query_source_info` is the source position of the query, used if an error is returned.
+fn eval_query_cel(
+    response: &Response,
+    expr: &Template,
+    variables: &VariableSet,
+    query_source_info: SourceInfo,
+) -> QueryResult {
+    use cel_interpreter::{Context, Program};
+    use std::sync::Arc;
+
+    let expr_str = eval_template(expr, variables)?;
+
+    let program = match Program::compile(&expr_str) {
+        Ok(p) => p,
+        Err(_) => {
+            return Err(RunnerError::new(
+                query_source_info,
+                RunnerErrorKind::QueryInvalidCelExpression { value: expr_str },
+                false,
+            ))
+        }
+    };
+
+    let mut ctx = Context::default();
+
+    // Expose the response body as `body` in the CEL context.
+    // If the body is valid JSON, expose it as a structured CEL value; otherwise expose it as a string.
+    if let Ok(body_text) = response.text() {
+        let body_cel = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body_text) {
+            json_to_cel_value(&json)
+        } else {
+            cel_interpreter::Value::String(Arc::new(body_text))
+        };
+        let _ = ctx.add_variable("body", body_cel);
+    }
+
+    // Expose each Hurl variable by name in the CEL context.
+    for (name, variable) in variables.iter() {
+        let cel_val = hurl_value_to_cel(variable.value());
+        let _ = ctx.add_variable(name.as_str(), cel_val);
+    }
+
+    let cel_result = match program.execute(&ctx) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(RunnerError::new(
+                query_source_info,
+                RunnerErrorKind::QueryInvalidCelExpression {
+                    value: e.to_string(),
+                },
+                false,
+            ))
+        }
+    };
+
+    Ok(Some(cel_value_to_hurl(cel_result)))
+}
+
+/// Converts a `serde_json::Value` to a `cel_interpreter::Value`.
+fn json_to_cel_value(v: &serde_json::Value) -> cel_interpreter::Value {
+    use cel_interpreter::objects::{Key, Map};
+    use cel_interpreter::Value as CelValue;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    match v {
+        serde_json::Value::Null => CelValue::Null,
+        serde_json::Value::Bool(b) => CelValue::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                CelValue::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                CelValue::Float(f)
+            } else {
+                CelValue::String(Arc::new(n.to_string()))
+            }
+        }
+        serde_json::Value::String(s) => CelValue::String(Arc::new(s.clone())),
+        serde_json::Value::Array(arr) => {
+            CelValue::List(Arc::new(arr.iter().map(json_to_cel_value).collect()))
+        }
+        serde_json::Value::Object(obj) => {
+            let map: HashMap<Key, CelValue> = obj
+                .iter()
+                .map(|(k, v)| (Key::String(Arc::new(k.clone())), json_to_cel_value(v)))
+                .collect();
+            CelValue::Map(Map {
+                map: Arc::new(map),
+            })
+        }
+    }
+}
+
+/// Converts a Hurl [`Value`] to a `cel_interpreter::Value`.
+fn hurl_value_to_cel(v: &Value) -> cel_interpreter::Value {
+    use cel_interpreter::Value as CelValue;
+    use std::sync::Arc;
+
+    match v {
+        Value::Bool(b) => CelValue::Bool(*b),
+        Value::Number(Number::Integer(i)) => CelValue::Int(*i),
+        Value::Number(Number::Float(f)) => CelValue::Float(*f),
+        Value::Number(Number::BigInteger(s)) => CelValue::String(Arc::new(s.clone())),
+        Value::String(s) => CelValue::String(Arc::new(s.clone())),
+        Value::Null => CelValue::Null,
+        Value::Bytes(b) => CelValue::Bytes(Arc::new(b.clone())),
+        Value::List(items) => {
+            CelValue::List(Arc::new(items.iter().map(hurl_value_to_cel).collect()))
+        }
+        _ => CelValue::String(Arc::new(v.to_string())),
+    }
+}
+
+/// Converts a `cel_interpreter::Value` to a Hurl [`Value`].
+fn cel_value_to_hurl(v: cel_interpreter::Value) -> Value {
+    use cel_interpreter::Value as CelValue;
+
+    match v {
+        CelValue::Bool(b) => Value::Bool(b),
+        CelValue::Int(i) => Value::Number(Number::Integer(i)),
+        CelValue::UInt(u) => {
+            if let Ok(i) = i64::try_from(u) {
+                Value::Number(Number::Integer(i))
+            } else {
+                Value::Number(Number::BigInteger(u.to_string()))
+            }
+        }
+        CelValue::Float(f) => Value::Number(Number::Float(f)),
+        CelValue::String(s) => Value::String(s.as_ref().clone()),
+        CelValue::Bytes(b) => Value::Bytes(b.as_ref().clone()),
+        CelValue::Null => Value::Null,
+        CelValue::List(items) => {
+            Value::List(items.iter().map(|i| cel_value_to_hurl(i.clone())).collect())
+        }
+        CelValue::Map(m) => {
+            let elements: Vec<(String, Value)> = m
+                .map
+                .iter()
+                .map(|(k, v)| (k.to_string(), cel_value_to_hurl(v.clone())))
+                .collect();
+            Value::Object(elements)
+        }
+        CelValue::Duration(d) => Value::Number(Number::Integer(d.num_milliseconds())),
+        CelValue::Timestamp(ts) => Value::Date(ts.with_timezone(&Utc)),
+        CelValue::Function(name, _) => Value::String(name.as_ref().clone()),
+    }
 }
 
 fn eval_cookie_attribute_name(
@@ -1541,5 +1694,95 @@ pub mod tests {
             .unwrap(),
             Value::String("A=B, C=D".to_string())
         );
+    }
+
+    fn cel_query(expr: &str) -> Query {
+        Query {
+            source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
+            value: QueryValue::Cel {
+                space0: Whitespace {
+                    value: String::from(" "),
+                    source_info: SourceInfo::new(Pos::new(1, 4), Pos::new(1, 5)),
+                },
+                expr: Template::new(
+                    Some('"'),
+                    vec![TemplateElement::String {
+                        value: expr.to_string(),
+                        source: expr.to_source(),
+                    }],
+                    SourceInfo::new(Pos::new(1, 5), Pos::new(1, 5 + expr.len())),
+                ),
+            },
+        }
+    }
+
+    #[test]
+    fn test_eval_cel_simple_bool() {
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+        let response = http::hello_http_response();
+        let result = eval_query(
+            &cel_query("1 + 1 == 2"),
+            &variables,
+            &[&response],
+            &mut cache,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_eval_cel_with_json_body() {
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+        let response = http::json_http_response();
+        let result = eval_query(
+            &cel_query("body.success == false"),
+            &variables,
+            &[&response],
+            &mut cache,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_eval_cel_with_variable() {
+        let mut variables = VariableSet::new();
+        variables.insert(
+            "threshold".to_string(),
+            Value::Number(Number::Integer(10)),
+        );
+        let mut cache = BodyCache::new();
+        let response = http::json_http_response();
+        let result = eval_query(
+            &cel_query("threshold > 5"),
+            &variables,
+            &[&response],
+            &mut cache,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_eval_cel_execution_error() {
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+        let response = http::hello_http_response();
+        let error = eval_query(
+            &cel_query("undefined_var + 1"),
+            &variables,
+            &[&response],
+            &mut cache,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.kind,
+            RunnerErrorKind::QueryInvalidCelExpression { .. }
+        ));
     }
 }

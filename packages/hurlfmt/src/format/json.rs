@@ -494,6 +494,9 @@ fn query_value_attributes(query_value: &QueryValue) -> Vec<(String, JValue)> {
         } => {
             attributes.push(("expr".to_string(), field.to_json()));
         }
+        QueryValue::Cel { expr, .. } => {
+            attributes.push(("expr".to_string(), JValue::String(expr.to_string())));
+        }
         _ => {}
     };
     attributes
