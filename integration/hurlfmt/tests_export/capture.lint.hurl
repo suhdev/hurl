@@ -6,3 +6,4 @@ name: jsonpath "$.name"
 name2: jsonpath "$.name"          # name
 token: jsonpath "$.token" redact
 token2: jsonpath "$.token" redact # token
+count: cel "body.count"
