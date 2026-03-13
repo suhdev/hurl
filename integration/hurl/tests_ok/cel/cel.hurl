@@ -48,3 +48,14 @@ GET http://localhost:8000/cel-text
 HTTP 200
 [Asserts]
 cel "body == 'Hello World!'" == true
+
+
+# CEL expressions can reference built-in Hurl response variables:
+# status, duration, url, ip, and version are automatically available
+GET http://localhost:8000/cel
+HTTP 200
+[Asserts]
+cel "status == 200" == true
+cel "duration >= 0" == true
+cel "url == 'http://localhost:8000/cel'" == true
+cel "version == '1.1'" == true

@@ -478,6 +478,31 @@ fn eval_query_cel(
         let _ = ctx.add_variable("body", body_cel);
     }
 
+    // Expose built-in response metadata as CEL variables.
+    let _ = ctx.add_variable("status", cel_interpreter::Value::Int(i64::from(response.status)));
+    let _ = ctx.add_variable(
+        "duration",
+        cel_interpreter::Value::Int(response.duration.as_millis() as i64),
+    );
+    let _ = ctx.add_variable(
+        "url",
+        cel_interpreter::Value::String(Arc::new(response.url.to_string())),
+    );
+    let _ = ctx.add_variable(
+        "ip",
+        cel_interpreter::Value::String(Arc::new(response.ip_addr.to_string())),
+    );
+    let version_str = response
+        .version
+        .to_string()
+        .strip_prefix("HTTP/")
+        .unwrap_or("")
+        .to_string();
+    let _ = ctx.add_variable(
+        "version",
+        cel_interpreter::Value::String(Arc::new(version_str)),
+    );
+
     // Expose each Hurl variable by name in the CEL context.
     for (name, variable) in variables.iter() {
         let cel_val = hurl_value_to_cel(variable.value());
@@ -1784,5 +1809,69 @@ pub mod tests {
             error.kind,
             RunnerErrorKind::QueryInvalidCelExpression { .. }
         ));
+    }
+
+    #[test]
+    fn test_eval_cel_builtin_status() {
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+        let response = http::hello_http_response();
+        let result = eval_query(
+            &cel_query("status == 200"),
+            &variables,
+            &[&response],
+            &mut cache,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_eval_cel_builtin_duration() {
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+        let response = http::hello_http_response();
+        let result = eval_query(
+            &cel_query("duration >= 0"),
+            &variables,
+            &[&response],
+            &mut cache,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_eval_cel_builtin_url() {
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+        let response = http::hello_http_response();
+        let result = eval_query(
+            &cel_query("url == 'http://localhost/'"),
+            &variables,
+            &[&response],
+            &mut cache,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_eval_cel_builtin_version() {
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+        let response = http::hello_http_response();
+        let result = eval_query(
+            &cel_query("version == '1.0'"),
+            &variables,
+            &[&response],
+            &mut cache,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, Value::Bool(true));
     }
 }
